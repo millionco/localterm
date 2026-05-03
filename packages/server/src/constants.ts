@@ -5,6 +5,10 @@ export const DEFAULT_ROWS = 32;
 export const DEFAULT_SCROLLBACK = 5000;
 export const DEFAULT_SHELL_FALLBACK = "/bin/sh";
 export const DEFAULT_TITLE = "shell";
+export const PROCESS_TITLE_POLL_MS = 500;
+export const PROCESS_TITLE_RESOLVE_TIMEOUT_MS = 250;
+export const IDLE_TITLE_MAX_PATH_SEGMENTS = 3;
+export const IDLE_TITLE_TRUNCATION_PREFIX = "…";
 
 export const FRIENDLY_ID_SUFFIX_LENGTH = 4;
 

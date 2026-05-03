@@ -9,11 +9,15 @@ import {
   DEFAULT_ROWS,
   DEFAULT_SCROLLBACK,
   DEFAULT_TITLE,
+  PROCESS_TITLE_POLL_MS,
   PTY_ENV_DENYLIST,
 } from "./constants.js";
 import { ensureSpawnHelperExecutable } from "./ensure-spawn-helper-executable.js";
 import { generateFriendlyId } from "./friendly-id.js";
+import { resolveForegroundProcessTitle } from "./foreground-process-title.js";
 import { getDefaultShell } from "./default-shell.js";
+import { resolveCwdForPid } from "./cwd-resolver.js";
+import { formatWorkingDirectoryTitle } from "./working-directory-title.js";
 import type { CreateSessionInput, ServerToClientMessage, SessionMetadata } from "./types.js";
 
 const requireCjs = createRequire(import.meta.url);
@@ -47,6 +51,9 @@ export class Session extends EventEmitter<SessionEvents> {
   private exited = false;
   private exitCode: number | null = null;
   private attachmentCount = 0;
+  private titlePollTimer: NodeJS.Timeout | null = null;
+  private titlePollPending = false;
+  private hasResolvedAutomaticTitle = false;
 
   constructor(input: CreateSessionInput) {
     super();
@@ -57,7 +64,7 @@ export class Session extends EventEmitter<SessionEvents> {
     this.currentCols = input.cols ?? DEFAULT_COLS;
     this.currentRows = input.rows ?? DEFAULT_ROWS;
     this.createdAt = Date.now();
-    this.currentTitle = DEFAULT_TITLE;
+    this.currentTitle = formatWorkingDirectoryTitle(this.cwd) || DEFAULT_TITLE;
 
     this.headless = new HeadlessTerminalCtor({
       cols: this.currentCols,
@@ -69,10 +76,10 @@ export class Session extends EventEmitter<SessionEvents> {
     this.headless.loadAddon(this.serialize);
 
     this.headless.onTitleChange((title) => {
+      if (this.hasResolvedAutomaticTitle) return;
       const trimmed = title.trim();
       if (!trimmed || trimmed === this.currentTitle) return;
-      this.currentTitle = trimmed;
-      this.emit("title", trimmed);
+      this.setTitle(trimmed);
     });
 
     const env: Record<string, string> = {};
@@ -114,8 +121,12 @@ export class Session extends EventEmitter<SessionEvents> {
     this.pty.onExit(({ exitCode }) => {
       this.exited = true;
       this.exitCode = exitCode;
+      this.stopTitlePolling();
       this.emit("exit", exitCode);
     });
+
+    this.startTitlePolling();
+    void this.refreshProcessTitle();
   }
 
   get pid(): number {
@@ -149,6 +160,42 @@ export class Session extends EventEmitter<SessionEvents> {
   detach(): void {
     if (this.attachmentCount <= 0) return;
     this.attachmentCount -= 1;
+  }
+
+  private setTitle(title: string): void {
+    if (title === this.currentTitle) return;
+    this.currentTitle = title;
+    this.emit("title", title);
+  }
+
+  private startTitlePolling(): void {
+    if (this.titlePollTimer) return;
+    this.titlePollTimer = setInterval(() => void this.refreshProcessTitle(), PROCESS_TITLE_POLL_MS);
+    this.titlePollTimer.unref();
+  }
+
+  private stopTitlePolling(): void {
+    if (!this.titlePollTimer) return;
+    clearInterval(this.titlePollTimer);
+    this.titlePollTimer = null;
+  }
+
+  private async refreshProcessTitle(): Promise<void> {
+    if (this.exited || this.titlePollPending) return;
+    this.titlePollPending = true;
+    try {
+      const foregroundTitle = await resolveForegroundProcessTitle(this.pid);
+      if (foregroundTitle) {
+        this.hasResolvedAutomaticTitle = true;
+        this.setTitle(foregroundTitle);
+        return;
+      }
+      const cwd = await resolveCwdForPid(this.pid);
+      this.hasResolvedAutomaticTitle = true;
+      this.setTitle(formatWorkingDirectoryTitle(cwd ?? this.cwd));
+    } finally {
+      this.titlePollPending = false;
+    }
   }
 
   metadata(): SessionMetadata {
@@ -205,6 +252,7 @@ export class Session extends EventEmitter<SessionEvents> {
   }
 
   dispose(): void {
+    this.stopTitlePolling();
     this.kill();
     this.headless.dispose();
     this.removeAllListeners();
