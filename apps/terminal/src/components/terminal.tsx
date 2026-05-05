@@ -7,7 +7,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal as XtermTerminal } from "@xterm/xterm";
-import { Check, ChevronDown, ChevronUp, Copy, Plus, Search } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Copy, Plus, Search, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertDialog,
@@ -887,6 +887,13 @@ export const Terminal = ({ onModalOpenChange }: TerminalProps = {}) => {
                 aria-label="next match"
               >
                 <ChevronDown />
+              </InputGroupButton>
+              <InputGroupButton
+                size="icon-xs"
+                onClick={closeSearch}
+                aria-label="close search"
+              >
+                <X />
               </InputGroupButton>
             </InputGroupAddon>
           </InputGroup>
