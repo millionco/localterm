@@ -1,5 +1,6 @@
 import { ChevronDown, Settings } from "lucide-react";
-import { useState, type CSSProperties } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
+import { LocalFontPicker } from "@/components/local-font-picker";
 import { NumberStepper } from "@/components/number-stepper";
 import { SettingsSelect, type SettingsSelectItem } from "@/components/settings-select";
 import { Button } from "@/components/ui/button";
@@ -24,7 +25,7 @@ import {
   isTerminalCursorStyle,
   type TerminalCursorStyle,
 } from "@/lib/terminal-cursor";
-import { TERMINAL_FONTS } from "@/lib/terminal-fonts";
+import { LOCAL_FONT_ID, TERMINAL_FONTS, buildLocalFont } from "@/lib/terminal-fonts";
 import { TERMINAL_SCROLLBACK_PRESETS, isTerminalScrollbackValue } from "@/lib/terminal-scrollback";
 import { TERMINAL_THEMES } from "@/lib/terminal-themes";
 import type { TerminalSessionInfo } from "@/lib/terminal-session-info";
@@ -37,6 +38,8 @@ interface SettingsMenuProps {
   fontId: string;
   onFontChange: (fontId: string) => void;
   onFontPreview?: (fontId: string | null) => void;
+  localFontFamily: string;
+  onLocalFontFamilyChange: (family: string) => void;
   fontSize: number;
   onFontSizeChange: (size: number) => void;
   lineHeight: number;
@@ -67,11 +70,45 @@ const THEME_ITEMS: readonly SettingsSelectItem[] = TERMINAL_THEMES.map((theme) =
   label: theme.name,
 }));
 
-const FONT_ITEMS: readonly SettingsSelectItem[] = TERMINAL_FONTS.map((font) => ({
-  id: font.id,
-  label: font.name,
-  itemStyle: FONT_ITEM_STYLE_BY_ID[font.id],
-}));
+const LOCAL_BADGE_CLASSES =
+  "shrink-0 rounded-sm border border-border/50 px-1 py-0 text-[9px] font-medium tracking-wide text-muted-foreground/80 uppercase";
+
+const buildLocalLabel = (rawFamily: string, isActive: boolean) => {
+  const trimmed = rawFamily.trim();
+  const displayName = trimmed && isActive ? trimmed : "Local Font";
+  return (
+    <span className="flex w-full min-w-0 items-center gap-2">
+      <span className="min-w-0 flex-1 truncate">{displayName}</span>
+      <span className={LOCAL_BADGE_CLASSES}>Local</span>
+    </span>
+  );
+};
+
+const buildFontItems = (
+  localFontFamily: string,
+  activeFontId: string,
+  openLocalPicker: () => void,
+): readonly SettingsSelectItem[] =>
+  TERMINAL_FONTS.map((font) => {
+    if (font.id !== LOCAL_FONT_ID) {
+      return {
+        id: font.id,
+        label: font.name,
+        itemStyle: FONT_ITEM_STYLE_BY_ID[font.id],
+      };
+    }
+    const trimmedLocal = localFontFamily.trim();
+    const isActive = activeFontId === LOCAL_FONT_ID;
+    const itemStyle = trimmedLocal
+      ? { fontFamily: buildLocalFont(trimmedLocal).family }
+      : FONT_ITEM_STYLE_BY_ID[font.id];
+    return {
+      id: font.id,
+      label: buildLocalLabel(localFontFamily, isActive),
+      itemStyle,
+      onSelect: openLocalPicker,
+    };
+  });
 
 const CURSOR_STYLE_ITEMS: readonly SettingsSelectItem[] = TERMINAL_CURSOR_STYLES.map((option) => ({
   id: option.id,
@@ -113,6 +150,8 @@ export const SettingsMenu = ({
   fontId,
   onFontChange,
   onFontPreview,
+  localFontFamily,
+  onLocalFontFamilyChange,
   fontSize,
   onFontSizeChange,
   lineHeight,
@@ -129,6 +168,11 @@ export const SettingsMenu = ({
   sessionInfo,
 }: SettingsMenuProps) => {
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
+  const [isLocalPickerOpen, setIsLocalPickerOpen] = useState(false);
+  const fontItems = useMemo(
+    () => buildFontItems(localFontFamily, fontId, () => setIsLocalPickerOpen(true)),
+    [localFontFamily, fontId],
+  );
 
   const handlePopoverOpenChange = (open: boolean) => {
     setIsPopoverOpen(open);
@@ -229,13 +273,21 @@ export const SettingsMenu = ({
             <FieldLabel className={SECTION_LABEL_CLASSES}>Font</FieldLabel>
             <SettingsSelect
               value={fontId}
-              items={FONT_ITEMS}
+              items={fontItems}
               ariaLabel="select font"
               placeholder="Font"
               onValueChange={handleFontChange}
               onOpenChange={handleFontSelectOpenChange}
               onItemHover={onFontPreview ? (id) => onFontPreview(id) : undefined}
             />
+            <div className="relative">
+              <LocalFontPicker
+                open={isLocalPickerOpen}
+                onOpenChange={setIsLocalPickerOpen}
+                selectedFamily={localFontFamily}
+                onSelect={onLocalFontFamilyChange}
+              />
+            </div>
             <div className="flex items-center justify-between gap-2">
               <span className={ROW_LABEL_CLASSES}>Size</span>
               <NumberStepper

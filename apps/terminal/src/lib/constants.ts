@@ -60,6 +60,11 @@ export const SEARCH_ACTIVE_MATCH_BORDER_HEX = "#ff8080";
 
 export const TERMINAL_THEME_STORAGE_KEY = "localterm:terminal-theme-id";
 export const TERMINAL_FONT_STORAGE_KEY = "localterm:terminal-font-id";
+export const TERMINAL_LOCAL_FONT_FAMILY_STORAGE_KEY = "localterm:terminal-local-font-family";
+export const TERMINAL_LOCAL_FONT_FAMILY_MAX_LENGTH = 128;
+export const LOCAL_FONT_PICKER_LIST_MAX_ROWS = 8;
+export const LOCAL_FONT_PICKER_LIST_ROW_HEIGHT_PX = 26;
+export const LOCAL_FONT_PICKER_SIDE_OFFSET_PX = 8;
 export const TERMINAL_FONT_SIZE_STORAGE_KEY = "localterm:terminal-font-size";
 export const TERMINAL_LINE_HEIGHT_STORAGE_KEY = "localterm:terminal-line-height";
 export const TERMINAL_CURSOR_STYLE_STORAGE_KEY = "localterm:terminal-cursor-style";

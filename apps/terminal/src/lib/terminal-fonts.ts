@@ -1,15 +1,16 @@
-type TerminalFontSource = "fontsource" | "google";
+type TerminalFontSource = "fontsource" | "google" | "local";
 
 export interface TerminalFont {
   id: string;
   name: string;
   family: string;
   source: TerminalFontSource;
+  isLocal?: boolean;
 }
 
 const MONO_FALLBACK = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
-const buildFamily = (primary: string): string => `"${primary}", ${MONO_FALLBACK}`;
+export const buildFamily = (primary: string): string => `"${primary}", ${MONO_FALLBACK}`;
 
 const GEIST_MONO: TerminalFont = {
   id: "geist-mono",
@@ -88,6 +89,16 @@ const ANONYMOUS_PRO: TerminalFont = {
   source: "google",
 };
 
+export const LOCAL_FONT_ID = "local-font";
+
+const LOCAL_FONT_PLACEHOLDER: TerminalFont = {
+  id: LOCAL_FONT_ID,
+  name: "Local Font",
+  family: MONO_FALLBACK,
+  source: "local",
+  isLocal: true,
+};
+
 export const TERMINAL_FONTS: TerminalFont[] = [
   GEIST_MONO,
   ANONYMOUS_PRO,
@@ -100,12 +111,33 @@ export const TERMINAL_FONTS: TerminalFont[] = [
   SOURCE_CODE_PRO,
   SPACE_MONO,
   UBUNTU_MONO,
+  LOCAL_FONT_PLACEHOLDER,
 ];
 
 export const DEFAULT_TERMINAL_FONT_ID: string = GEIST_MONO.id;
 
-export const findTerminalFontById = (id: string | null | undefined): TerminalFont => {
+export const isLocalFontId = (id: string | null | undefined): boolean => id === LOCAL_FONT_ID;
+
+export const buildLocalFont = (rawFamily: string): TerminalFont => {
+  const trimmed = rawFamily.trim();
+  if (!trimmed) return LOCAL_FONT_PLACEHOLDER;
+  return {
+    id: LOCAL_FONT_ID,
+    name: trimmed,
+    family: buildFamily(trimmed),
+    source: "local",
+    isLocal: true,
+  };
+};
+
+export const findTerminalFontById = (
+  id: string | null | undefined,
+  localFamily?: string,
+): TerminalFont => {
   if (!id) return GEIST_MONO;
+  if (isLocalFontId(id)) {
+    return localFamily ? buildLocalFont(localFamily) : LOCAL_FONT_PLACEHOLDER;
+  }
   return TERMINAL_FONTS.find((font) => font.id === id) ?? GEIST_MONO;
 };
 

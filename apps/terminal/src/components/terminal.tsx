@@ -73,6 +73,7 @@ import { loadStoredTerminalCursorStyle } from "@/utils/load-stored-terminal-curs
 import { loadStoredTerminalFontId } from "@/utils/load-stored-terminal-font-id";
 import { loadStoredTerminalFontSize } from "@/utils/load-stored-terminal-font-size";
 import { loadStoredTerminalLineHeight } from "@/utils/load-stored-terminal-line-height";
+import { loadStoredTerminalLocalFontFamily } from "@/utils/load-stored-terminal-local-font-family";
 import { loadStoredTerminalScrollback } from "@/utils/load-stored-terminal-scrollback";
 import { loadStoredTerminalScrollOnUserInput } from "@/utils/load-stored-terminal-scroll-on-user-input";
 import { loadStoredTerminalThemeId } from "@/utils/load-stored-terminal-theme-id";
@@ -82,6 +83,7 @@ import { storeTerminalCursorStyle } from "@/utils/store-terminal-cursor-style";
 import { storeTerminalFontId } from "@/utils/store-terminal-font-id";
 import { storeTerminalFontSize } from "@/utils/store-terminal-font-size";
 import { storeTerminalLineHeight } from "@/utils/store-terminal-line-height";
+import { storeTerminalLocalFontFamily } from "@/utils/store-terminal-local-font-family";
 import { storeTerminalScrollback } from "@/utils/store-terminal-scrollback";
 import { storeTerminalScrollOnUserInput } from "@/utils/store-terminal-scroll-on-user-input";
 import { storeTerminalThemeId } from "@/utils/store-terminal-theme-id";
@@ -140,6 +142,7 @@ export const Terminal = ({ onModalOpenChange }: TerminalProps = {}) => {
   const copyFeedbackTimerRef = useRef<number | null>(null);
   const initialThemeIdRef = useRef<string>(loadStoredTerminalThemeId());
   const initialFontIdRef = useRef<string>(loadStoredTerminalFontId());
+  const initialLocalFontFamilyRef = useRef<string>(loadStoredTerminalLocalFontFamily());
   const initialFontSizeRef = useRef<number>(loadStoredTerminalFontSize());
   const initialLineHeightRef = useRef<number>(loadStoredTerminalLineHeight());
   const initialCursorStyleRef = useRef<TerminalCursorStyle>(loadStoredTerminalCursorStyle());
@@ -165,8 +168,14 @@ export const Terminal = ({ onModalOpenChange }: TerminalProps = {}) => {
   const effectiveTheme = useMemo(() => findTerminalThemeById(effectiveThemeId), [effectiveThemeId]);
   const [activeFontId, setActiveFontId] = useState<string>(initialFontIdRef.current);
   const [previewFontId, setPreviewFontId] = useState<string | null>(null);
+  const [activeLocalFontFamily, setActiveLocalFontFamily] = useState<string>(
+    initialLocalFontFamilyRef.current,
+  );
   const effectiveFontId = previewFontId ?? activeFontId;
-  const effectiveFont = useMemo(() => findTerminalFontById(effectiveFontId), [effectiveFontId]);
+  const effectiveFont = useMemo(
+    () => findTerminalFontById(effectiveFontId, activeLocalFontFamily),
+    [effectiveFontId, activeLocalFontFamily],
+  );
   const [activeFontSize, setActiveFontSize] = useState<number>(initialFontSizeRef.current);
   const [activeLineHeight, setActiveLineHeight] = useState<number>(initialLineHeightRef.current);
   const [activeCursorStyle, setActiveCursorStyle] = useState<TerminalCursorStyle>(
@@ -248,7 +257,10 @@ export const Terminal = ({ onModalOpenChange }: TerminalProps = {}) => {
       }
     };
 
-    const initialFont = findTerminalFontById(initialFontIdRef.current);
+    const initialFont = findTerminalFontById(
+      initialFontIdRef.current,
+      initialLocalFontFamilyRef.current,
+    );
     void awaitFontReady(initialFont);
 
     const terminal = new XtermTerminal({
@@ -573,6 +585,11 @@ export const Terminal = ({ onModalOpenChange }: TerminalProps = {}) => {
     storeTerminalFontId(nextFontId);
   }, []);
 
+  const handleLocalFontFamilyChange = useCallback((nextFamily: string) => {
+    setActiveLocalFontFamily(nextFamily);
+    storeTerminalLocalFontFamily(nextFamily);
+  }, []);
+
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
@@ -800,6 +817,8 @@ export const Terminal = ({ onModalOpenChange }: TerminalProps = {}) => {
               fontId={activeFontId}
               onFontChange={handleFontChange}
               onFontPreview={setPreviewFontId}
+              localFontFamily={activeLocalFontFamily}
+              onLocalFontFamilyChange={handleLocalFontFamilyChange}
               fontSize={activeFontSize}
               onFontSizeChange={handleFontSizeChange}
               lineHeight={activeLineHeight}

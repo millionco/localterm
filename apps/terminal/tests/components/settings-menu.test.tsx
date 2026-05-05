@@ -27,10 +27,12 @@ interface SettingsMenuHarnessProps {
   initialScrollOnUserInput?: boolean;
   initialThemeId?: string;
   initialFontId?: string;
+  initialLocalFontFamily?: string;
   onThemeChange?: (id: string) => void;
   onThemePreview?: (id: string | null) => void;
   onFontChange?: (id: string) => void;
   onFontPreview?: (id: string | null) => void;
+  onLocalFontFamilyChange?: (family: string) => void;
   onFontSizeChange?: (size: number) => void;
   onLineHeightChange?: (lineHeight: number) => void;
   onCursorStyleChange?: (style: TerminalCursorStyle) => void;
@@ -50,10 +52,12 @@ const renderSettingsMenu = ({
   initialScrollOnUserInput = DEFAULT_TERMINAL_SCROLL_ON_USER_INPUT,
   initialThemeId = "vesper",
   initialFontId = "geist-mono",
+  initialLocalFontFamily = "",
   onThemeChange = () => {},
   onThemePreview,
   onFontChange = () => {},
   onFontPreview,
+  onLocalFontFamilyChange = () => {},
   onFontSizeChange = () => {},
   onLineHeightChange = () => {},
   onCursorStyleChange = () => {},
@@ -72,6 +76,8 @@ const renderSettingsMenu = ({
         fontId={initialFontId}
         onFontChange={onFontChange}
         onFontPreview={onFontPreview}
+        localFontFamily={initialLocalFontFamily}
+        onLocalFontFamilyChange={onLocalFontFamilyChange}
         fontSize={initialFontSize}
         onFontSizeChange={onFontSizeChange}
         lineHeight={initialLineHeight}
@@ -486,6 +492,39 @@ describe("SettingsMenu live preview", () => {
     expect(onThemePreview).toHaveBeenCalledWith(null);
     expect(onFontPreview).toHaveBeenCalledWith(null);
     expect(onCursorStylePreview).toHaveBeenCalledWith(null);
+  });
+});
+
+describe("SettingsMenu local font flow", () => {
+  it("keeps the local font picker closed by default", () => {
+    renderSettingsMenu({ initialFontId: "geist-mono" });
+    fireEvent.click(screen.getByLabelText("terminal settings"));
+    expect(screen.queryByLabelText("local font family")).toBeNull();
+    expect(screen.queryByLabelText("search local fonts")).toBeNull();
+  });
+
+  it("opens the picker fallback input when the user picks the Local Font dropdown item", () => {
+    renderSettingsMenu({
+      initialFontId: "geist-mono",
+      initialLocalFontFamily: "Operator Mono",
+    });
+    fireEvent.click(screen.getByLabelText("terminal settings"));
+    fireEvent.click(screen.getByLabelText("select font"));
+    fireEvent.click(screen.getByText("Local Font"));
+    const fallbackInput = screen.getByLabelText("local font family") as HTMLInputElement;
+    expect(fallbackInput).toBeDefined();
+    expect(fallbackInput.value).toBe("Operator Mono");
+  });
+
+  it("propagates manual-entry edits via onLocalFontFamilyChange", () => {
+    const onLocalFontFamilyChange = vi.fn();
+    renderSettingsMenu({ initialFontId: "geist-mono", onLocalFontFamilyChange });
+    fireEvent.click(screen.getByLabelText("terminal settings"));
+    fireEvent.click(screen.getByLabelText("select font"));
+    fireEvent.click(screen.getByText("Local Font"));
+    const input = screen.getByLabelText("local font family");
+    fireEvent.change(input, { target: { value: "Comic Code" } });
+    expect(onLocalFontFamilyChange).toHaveBeenCalledWith("Comic Code");
   });
 });
 

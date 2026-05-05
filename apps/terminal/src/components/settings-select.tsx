@@ -13,6 +13,7 @@ export interface SettingsSelectItem {
   id: string;
   label: ReactNode;
   itemStyle?: CSSProperties;
+  onSelect?: () => void;
 }
 
 interface SettingsSelectProps {
@@ -31,10 +32,13 @@ const TRIGGER_BASE_CLASSES =
   "h-7 justify-between gap-1.5 rounded-md border-border/60 bg-transparent px-2 text-xs font-normal text-foreground shadow-none focus-visible:border-ring/40 focus-visible:ring-1 focus-visible:ring-ring/40 dark:bg-transparent";
 
 const CONTENT_CLASSES =
-  "max-h-72 w-(--anchor-width) origin-(--transform-origin) gap-0 overflow-hidden p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
+  "max-h-72 w-(--anchor-width) origin-(--transform-origin) gap-0 overflow-y-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
 
+// `*:first:*` overrides shadcn `SelectItem`'s child `ItemText` (vendored, can't
+// edit), which ships with `shrink-0 whitespace-nowrap` — that lets long labels
+// (e.g. local font names) overflow the row. min-w-0 + shrink make truncate work.
 const ITEM_CLASSES =
-  "rounded-sm py-1.5 pr-7 pl-2 text-xs hover:bg-foreground/10 hover:text-foreground focus:bg-foreground/10 focus:text-foreground";
+  "rounded-sm py-1.5 pr-9 pl-2 text-xs hover:bg-foreground/10 hover:text-foreground focus:bg-foreground/10 focus:text-foreground *:first:min-w-0 *:first:shrink *:first:overflow-hidden";
 
 export const SettingsSelect = ({
   value,
@@ -83,6 +87,7 @@ export const SettingsSelect = ({
             style={item.itemStyle}
             onPointerEnter={onItemHover ? () => onItemHover(item.id) : undefined}
             onFocus={onItemHover ? () => onItemHover(item.id) : undefined}
+            onClick={item.onSelect}
           >
             {item.label}
           </SelectItem>
