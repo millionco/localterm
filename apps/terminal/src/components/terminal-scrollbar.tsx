@@ -46,6 +46,7 @@ export const TerminalScrollbar = ({ terminal, hostRef }: TerminalScrollbarProps)
   const scrollLingerTimerRef = useRef<number | null>(null);
   const refreshFrameRef = useRef<number | null>(null);
   const dragOriginRef = useRef<{ pointerY: number; viewportY: number } | null>(null);
+  const trackElementRef = useRef<HTMLDivElement | null>(null);
   const lastDistanceFromBottomRef = useRef<number>(0);
   const trackObserverRef = useRef<ResizeObserver | null>(null);
 
@@ -59,6 +60,7 @@ export const TerminalScrollbar = ({ terminal, hostRef }: TerminalScrollbarProps)
   // with [] deps would miss it appearing later. A ref callback wires up the
   // ResizeObserver exactly when the track mounts and tears it down on unmount.
   const attachTrackElement = useCallback((trackElement: HTMLDivElement | null) => {
+    trackElementRef.current = trackElement;
     if (trackObserverRef.current) {
       trackObserverRef.current.disconnect();
       trackObserverRef.current = null;
@@ -193,27 +195,48 @@ export const TerminalScrollbar = ({ terminal, hostRef }: TerminalScrollbarProps)
     minThumbHeightPx: TERMINAL_SCROLLBAR_THUMB_MIN_HEIGHT_PX,
   });
 
-  const handleThumbPointerDown = useCallback(
+  const handleTrackPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if (!terminal || !isScrollable) return;
       if (event.button !== 0) return;
       event.preventDefault();
-      event.stopPropagation();
+      const trackElement = trackElementRef.current;
+      if (!trackElement) return;
+
       try {
-        event.currentTarget.setPointerCapture(event.pointerId);
+        trackElement.setPointerCapture(event.pointerId);
       } catch {
         /* pointer capture is unsupported in jsdom and a few exotic browsers; drag still works without it */
       }
-      dragOriginRef.current = {
-        pointerY: event.clientY,
-        viewportY: terminal.buffer.active.viewportY,
-      };
+
+      const trackRect = trackElement.getBoundingClientRect();
+      const clickOffsetPx = event.clientY - trackRect.top;
+      const isOnThumb = clickOffsetPx >= thumbTopPx && clickOffsetPx <= thumbTopPx + thumbHeightPx;
+
+      if (isOnThumb) {
+        dragOriginRef.current = {
+          pointerY: event.clientY,
+          viewportY: terminal.buffer.active.viewportY,
+        };
+      } else {
+        const currentBaseY = terminal.buffer.active.baseY;
+        const usableTrackPx = Math.max(trackHeightPx - thumbHeightPx, 1);
+        const scrollProgress = Math.max(0, Math.min(1, (clickOffsetPx - thumbHeightPx / 2) / usableTrackPx));
+        const targetViewportY = Math.max(0, Math.min(currentBaseY, Math.round(scrollProgress * currentBaseY)));
+        const currentViewportY = terminal.buffer.active.viewportY;
+        const lineDelta = targetViewportY - currentViewportY;
+        if (lineDelta !== 0) terminal.scrollLines(lineDelta);
+        dragOriginRef.current = {
+          pointerY: event.clientY,
+          viewportY: targetViewportY,
+        };
+      }
       setIsDragging(true);
     },
-    [isScrollable, terminal],
+    [isScrollable, terminal, thumbTopPx, thumbHeightPx, trackHeightPx],
   );
 
-  const handleThumbPointerMove = useCallback(
+  const handleTrackPointerMove = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       const dragOrigin = dragOriginRef.current;
       if (!dragOrigin || !terminal) return;
@@ -232,13 +255,14 @@ export const TerminalScrollbar = ({ terminal, hostRef }: TerminalScrollbarProps)
     [terminal, thumbHeightPx, trackHeightPx],
   );
 
-  const handleThumbPointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+  const handleTrackPointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const trackElement = trackElementRef.current;
     try {
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
+      if (trackElement?.hasPointerCapture(event.pointerId)) {
+        trackElement.releasePointerCapture(event.pointerId);
       }
     } catch {
-      /* see handleThumbPointerDown */
+      /* see handleTrackPointerDown */
     }
     dragOriginRef.current = null;
     setIsDragging(false);
@@ -252,17 +276,24 @@ export const TerminalScrollbar = ({ terminal, hostRef }: TerminalScrollbarProps)
     <div
       ref={attachTrackElement}
       aria-hidden="true"
-      className="pointer-events-none absolute z-10"
+      className={cn(
+        "absolute z-10 touch-none",
+        isVisible ? "pointer-events-auto" : "pointer-events-none",
+        isDragging && "cursor-grabbing",
+      )}
       style={{
         top: `${TERMINAL_SCROLLBAR_TRACK_EDGE_GUTTER_PX}px`,
         bottom: `${TERMINAL_SCROLLBAR_TRACK_EDGE_GUTTER_PX}px`,
         right: `${TERMINAL_SCROLLBAR_TRACK_INSET_PX}px`,
         width: `${TERMINAL_SCROLLBAR_TRACK_WIDTH_PX}px`,
         opacity: isVisible ? 1 : 0,
-        transition: `opacity ${
-          isVisible ? TERMINAL_SCROLLBAR_FADE_IN_MS : TERMINAL_SCROLLBAR_FADE_OUT_MS
-        }ms cubic-bezier(0.32, 0.72, 0, 1)`,
+        transition: `opacity ${isVisible ? TERMINAL_SCROLLBAR_FADE_IN_MS : TERMINAL_SCROLLBAR_FADE_OUT_MS
+          }ms cubic-bezier(0.32, 0.72, 0, 1)`,
       }}
+      onPointerDown={handleTrackPointerDown}
+      onPointerMove={handleTrackPointerMove}
+      onPointerUp={handleTrackPointerUp}
+      onPointerCancel={handleTrackPointerUp}
     >
       <div
         role="scrollbar"
@@ -273,17 +304,13 @@ export const TerminalScrollbar = ({ terminal, hostRef }: TerminalScrollbarProps)
         aria-valuenow={scrollState.viewportY}
         tabIndex={-1}
         className={cn(
-          "pointer-events-auto absolute right-0 left-0 cursor-grab touch-none rounded-full bg-foreground/55 transition-colors duration-100 hover:bg-foreground/75",
+          "absolute right-0 left-0 cursor-grab rounded-full bg-foreground/55 transition-colors duration-100 hover:bg-foreground/75",
           isDragging && "cursor-grabbing bg-foreground/85",
         )}
         style={{
           top: `${thumbTopPx}px`,
           height: `${thumbHeightPx}px`,
         }}
-        onPointerDown={handleThumbPointerDown}
-        onPointerMove={handleThumbPointerMove}
-        onPointerUp={handleThumbPointerUp}
-        onPointerCancel={handleThumbPointerUp}
       />
     </div>
   );
