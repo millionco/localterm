@@ -2,6 +2,18 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { Terminal } from "../../src/components/terminal";
 import {
+  TERMINAL_MSG_TYPE,
+  encodeExitPayload,
+  encodeTextPayload,
+  encodeTerminalMessage,
+} from "../../src/lib/terminal-codec";
+import {
+  XUMUX_CONTROL_CHANNEL,
+  XUMUX_DEFAULT_SESSION_CHANNEL,
+  XUMUX_FRAME_TYPE,
+  encodeFrame,
+} from "../../src/lib/xumux";
+import {
   DEFAULT_TERMINAL_FONT_SIZE_PX,
   DEFAULT_TERMINAL_LINE_HEIGHT,
   TERMINAL_CURSOR_BLINK_STORAGE_KEY,
@@ -21,6 +33,7 @@ interface FakeWebSocketHandle {
   send: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   fireOpen: () => void;
+  fireBinaryMessage: (data: Uint8Array) => void;
   fireMessage: (payload: unknown) => void;
   fireClose: (code?: number) => void;
   fireError: () => void;
@@ -55,6 +68,7 @@ const installFakeWebSocket = () => {
 
     readonly url: string;
     readyState: number = FakeWebSocket.CONNECTING;
+    binaryType = "blob";
     private listeners = new Map<string, Set<(event: unknown) => void>>();
 
     send = vi.fn();
@@ -71,6 +85,9 @@ const installFakeWebSocket = () => {
         fireOpen: () => {
           this.readyState = FakeWebSocket.OPEN;
           this.dispatch("open", {});
+        },
+        fireBinaryMessage: (data: Uint8Array) => {
+          this.dispatch("message", { data: data.buffer });
         },
         fireMessage: (payload) => {
           this.dispatch("message", { data: JSON.stringify(payload) });
@@ -248,8 +265,29 @@ beforeEach(() => {
   stubBrowserGlobals();
   installFakeWebSocket();
   Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
 });
+
+const makeWelcomeFrame = (): Uint8Array =>
+  encodeFrame({ channel: XUMUX_CONTROL_CHANNEL, type: XUMUX_FRAME_TYPE.WELCOME, flags: 0, payload: new Uint8Array(0) });
+
+const makeChannelAckFrame = (channelId: number): Uint8Array => {
+  const payload = new Uint8Array(2);
+  new DataView(payload.buffer).setUint16(0, channelId);
+  return encodeFrame({ channel: XUMUX_CONTROL_CHANNEL, type: XUMUX_FRAME_TYPE.CHANNEL_ACK, flags: 0, payload });
+};
+
+const makeTerminalDataFrame = (msgType: number, msgPayload: Uint8Array): Uint8Array => {
+  const terminalMsg = encodeTerminalMessage(msgType, msgPayload);
+  return encodeFrame({ channel: XUMUX_DEFAULT_SESSION_CHANNEL, type: XUMUX_FRAME_TYPE.DATA, flags: 0, payload: terminalMsg });
+};
+
+const performXumuxHandshake = (socketIndex: number) => {
+  const socket = fakeWebSockets[socketIndex]!;
+  socket.fireOpen();
+  socket.fireBinaryMessage(makeWelcomeFrame());
+  socket.fireBinaryMessage(makeChannelAckFrame(XUMUX_DEFAULT_SESSION_CHANNEL));
+};
 
 afterEach(() => {
   cleanup();
@@ -296,7 +334,7 @@ describe("Terminal modal", () => {
 
     act(() => {
       vi.advanceTimersByTime(1500);
-      fakeWebSockets[2]?.fireOpen();
+      performXumuxHandshake(2);
     });
     expect(screen.queryByText(/Lost connection/i)).toBeNull();
   });
@@ -304,17 +342,17 @@ describe("Terminal modal", () => {
   it("renders the dead-pill and 'Shell ended' modal when the server reports an exit", () => {
     render(<Terminal />);
     act(() => {
-      fakeWebSockets[0]?.fireOpen();
-      fakeWebSockets[0]?.fireMessage({ type: "exit", code: 137 });
+      performXumuxHandshake(0);
+      fakeWebSockets[0]?.fireBinaryMessage(makeTerminalDataFrame(TERMINAL_MSG_TYPE.EXIT, encodeExitPayload(137)));
     });
     expect(screen.queryByText(/Shell ended/i)).not.toBeNull();
     expect(screen.queryByText(/exited · code 137/i)).not.toBeNull();
   });
 
-  it("treats a WebSocket close after a successful open as the shell ending", () => {
+  it("treats a WebSocket close after a successful handshake as the shell ending", () => {
     render(<Terminal />);
     act(() => {
-      fakeWebSockets[0]?.fireOpen();
+      performXumuxHandshake(0);
       fakeWebSockets[0]?.fireClose();
     });
     expect(screen.queryByText(/Shell ended/i)).not.toBeNull();
@@ -323,8 +361,8 @@ describe("Terminal modal", () => {
   it("blocks the auto-reconnect loop after the shell exits", () => {
     render(<Terminal />);
     act(() => {
-      fakeWebSockets[0]?.fireOpen();
-      fakeWebSockets[0]?.fireMessage({ type: "exit", code: 0 });
+      performXumuxHandshake(0);
+      fakeWebSockets[0]?.fireBinaryMessage(makeTerminalDataFrame(TERMINAL_MSG_TYPE.EXIT, encodeExitPayload(0)));
       fakeWebSockets[0]?.fireClose();
       vi.advanceTimersByTime(5000);
     });
@@ -877,14 +915,14 @@ describe("Terminal shell info", () => {
     installFakeLocalStorage();
     render(<Terminal />);
     act(() => {
-      fakeWebSockets[0]?.fireOpen();
-      fakeWebSockets[0]?.fireMessage({
-        type: "session",
+      performXumuxHandshake(0);
+      const sessionPayload = encodeTextPayload(JSON.stringify({
         shell: "/opt/homebrew/bin/fish",
         shellName: "fish",
         pid: 54321,
         cwd: "/Users/tester/Developer/localterm",
-      });
+      }));
+      fakeWebSockets[0]?.fireBinaryMessage(makeTerminalDataFrame(TERMINAL_MSG_TYPE.SESSION_INFO, sessionPayload));
     });
 
     fireEvent.click(screen.getByLabelText("terminal settings"));

@@ -1,0 +1,16 @@
+export const XUMUX_HEADER_SIZE = 8;
+export const XUMUX_CONTROL_CHANNEL = 0x0000;
+export const XUMUX_DEFAULT_SESSION_CHANNEL = 0x0001;
+
+export const XUMUX_FRAME_TYPE = {
+  HELLO: 0x01,
+  WELCOME: 0x02,
+  OPEN_CHANNEL: 0x03,
+  CHANNEL_ACK: 0x04,
+  CLOSE_CHANNEL: 0x05,
+  PING: 0x06,
+  PONG: 0x07,
+  DATA: 0x10,
+} as const;
+
+export const XUMUX_KEEPALIVE_INTERVAL_MS = 30_000;

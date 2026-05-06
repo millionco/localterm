@@ -7,17 +7,8 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal as XtermTerminal } from "@xterm/xterm";
-import { Check, ChevronDown, ChevronUp, Copy, Plus, Search } from "lucide-react";
+import { ChevronDown, ChevronUp, Plus, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,56 +18,38 @@ import {
   InputGroupInput,
   InputGroupText,
 } from "@/components/ui/input-group";
-import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SettingsMenu } from "@/components/settings-menu";
+import { TerminalStatusDialog } from "@/components/terminal-status-dialog";
 import {
-  COPY_FEEDBACK_MS,
   DEAD_SESSION_TITLE_PREFIX,
   DEFAULT_DOCUMENT_TITLE,
   DISCONNECT_MODAL_THRESHOLD_FAILURES,
   FALLBACK_TERMINAL_BACKGROUND_HEX,
-  FAVICON_ACTIVE_DEBOUNCE_MS,
-  FAVICON_IDLE_DEBOUNCE_MS,
-  RECONNECT_DELAY_MS,
   RESIZE_DEBOUNCE_MS,
-  RESTART_COMMAND,
-  RETRY_BUTTON_FEEDBACK_MS,
   SEARCH_ACTIVE_MATCH_BACKGROUND_HEX,
   SEARCH_ACTIVE_MATCH_BORDER_HEX,
   SEARCH_MATCH_BACKGROUND_HEX,
   TOOLTIP_SIDE_OFFSET_PX,
 } from "@/lib/constants";
-import { serverToClientMessageSchema } from "@/lib/schemas";
-import type { TerminalCursorStyle } from "@/lib/terminal-cursor";
-import { findTerminalFontById } from "@/lib/terminal-fonts";
+import {
+  TERMINAL_MSG_TYPE,
+  decodeExitPayload,
+  decodeSessionInfoPayload,
+  decodeTextPayload,
+  encodeResizePayload,
+  encodeTextPayload,
+} from "@/lib/terminal-codec";
 import type { TerminalSessionInfo } from "@/lib/terminal-session-info";
-import { findTerminalThemeById } from "@/lib/terminal-themes";
+import { useFaviconActivity } from "@/hooks/use-favicon-activity";
+import { useTerminalSettings } from "@/hooks/use-terminal-settings";
+import { useTerminalTransport } from "@/hooks/use-terminal-transport";
 import { awaitFontReady } from "@/utils/await-font-ready";
-import { fitTerminalPreservingScroll } from "@/utils/fit-terminal-preserving-scroll";
 import { chunkInputByCodeUnits } from "@/utils/chunk-input-by-code-units";
-import { clampTerminalFontSize } from "@/utils/clamp-terminal-font-size";
-import { clampTerminalLineHeight } from "@/utils/clamp-terminal-line-height";
 import { detectIsMacPlatform } from "@/utils/detect-is-mac-platform";
+import { fitTerminalPreservingScroll } from "@/utils/fit-terminal-preserving-scroll";
 import { isFindShortcut } from "@/utils/is-find-shortcut";
-import { loadStoredTerminalCursorBlink } from "@/utils/load-stored-terminal-cursor-blink";
-import { loadStoredTerminalCursorStyle } from "@/utils/load-stored-terminal-cursor-style";
-import { loadStoredTerminalFontId } from "@/utils/load-stored-terminal-font-id";
-import { loadStoredTerminalFontSize } from "@/utils/load-stored-terminal-font-size";
-import { loadStoredTerminalLineHeight } from "@/utils/load-stored-terminal-line-height";
-import { loadStoredTerminalScrollback } from "@/utils/load-stored-terminal-scrollback";
-import { loadStoredTerminalScrollOnUserInput } from "@/utils/load-stored-terminal-scroll-on-user-input";
-import { loadStoredTerminalThemeId } from "@/utils/load-stored-terminal-theme-id";
-import { setTabFaviconState } from "@/utils/set-tab-favicon-state";
-import { storeTerminalCursorBlink } from "@/utils/store-terminal-cursor-blink";
-import { storeTerminalCursorStyle } from "@/utils/store-terminal-cursor-style";
-import { storeTerminalFontId } from "@/utils/store-terminal-font-id";
-import { storeTerminalFontSize } from "@/utils/store-terminal-font-size";
-import { storeTerminalLineHeight } from "@/utils/store-terminal-line-height";
-import { storeTerminalScrollback } from "@/utils/store-terminal-scrollback";
-import { storeTerminalScrollOnUserInput } from "@/utils/store-terminal-scroll-on-user-input";
-import { storeTerminalThemeId } from "@/utils/store-terminal-theme-id";
-import { MAX_INPUT_BYTES, type ClientToServerMessage } from "localterm-server/protocol";
+import { MAX_INPUT_BYTES } from "localterm-server/protocol";
 import "@xterm/xterm/css/xterm.css";
 
 const formatExitMarker = (code: number | null): string => {
@@ -102,10 +75,6 @@ const buildWebSocketUrl = (): string => {
   return url.toString();
 };
 
-const openNewShellInNewTab = () => {
-  window.open(window.location.origin, "_blank", "noopener,noreferrer");
-};
-
 interface SearchResultState {
   resultIndex: number;
   resultCount: number;
@@ -122,128 +91,90 @@ interface TerminalProps {
 export const Terminal = ({ onModalOpenChange }: TerminalProps = {}) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<XtermTerminal | null>(null);
-  const manualReconnectRef = useRef<(() => void) | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const refocusTerminalRef = useRef<(() => void) | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const retryFeedbackTimerRef = useRef<number | null>(null);
-  const copyFeedbackTimerRef = useRef<number | null>(null);
-  const initialThemeIdRef = useRef<string>(loadStoredTerminalThemeId());
-  const initialFontIdRef = useRef<string>(loadStoredTerminalFontId());
-  const initialFontSizeRef = useRef<number>(loadStoredTerminalFontSize());
-  const initialLineHeightRef = useRef<number>(loadStoredTerminalLineHeight());
-  const initialCursorStyleRef = useRef<TerminalCursorStyle>(loadStoredTerminalCursorStyle());
-  const initialCursorBlinkRef = useRef<boolean>(loadStoredTerminalCursorBlink());
-  const initialScrollbackRef = useRef<number>(loadStoredTerminalScrollback());
-  const initialScrollOnUserInputRef = useRef<boolean>(loadStoredTerminalScrollOnUserInput());
   const fitAddonRef = useRef<FitAddon | null>(null);
   const openSearchOverlayRef = useRef<(() => void) | null>(null);
+  const exitedRef = useRef(false);
+  const lastTitleRef = useRef("");
   const [exitInfo, setExitInfo] = useState<ExitInfo | null>(null);
-  const [consecutiveFailures, setConsecutiveFailures] = useState(0);
-  const [hasCopiedRestartCommand, setHasCopiedRestartCommand] = useState(false);
-  const [isRetryingConnection, setIsRetryingConnection] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchOpenAttempt, setSearchOpenAttempt] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<SearchResultState>({
-    resultIndex: -1,
-    resultCount: 0,
-  });
-  const [activeThemeId, setActiveThemeId] = useState<string>(initialThemeIdRef.current);
-  const [previewThemeId, setPreviewThemeId] = useState<string | null>(null);
-  const effectiveThemeId = previewThemeId ?? activeThemeId;
-  const effectiveTheme = useMemo(() => findTerminalThemeById(effectiveThemeId), [effectiveThemeId]);
-  const [activeFontId, setActiveFontId] = useState<string>(initialFontIdRef.current);
-  const [previewFontId, setPreviewFontId] = useState<string | null>(null);
-  const effectiveFontId = previewFontId ?? activeFontId;
-  const effectiveFont = useMemo(() => findTerminalFontById(effectiveFontId), [effectiveFontId]);
-  const [activeFontSize, setActiveFontSize] = useState<number>(initialFontSizeRef.current);
-  const [activeLineHeight, setActiveLineHeight] = useState<number>(initialLineHeightRef.current);
-  const [activeCursorStyle, setActiveCursorStyle] = useState<TerminalCursorStyle>(
-    initialCursorStyleRef.current,
-  );
-  const [previewCursorStyle, setPreviewCursorStyle] = useState<TerminalCursorStyle | null>(null);
-  const effectiveCursorStyle = previewCursorStyle ?? activeCursorStyle;
-  const [activeCursorBlink, setActiveCursorBlink] = useState<boolean>(
-    initialCursorBlinkRef.current,
-  );
-  const [activeScrollback, setActiveScrollback] = useState<number>(initialScrollbackRef.current);
-  const [activeScrollOnUserInput, setActiveScrollOnUserInput] = useState<boolean>(
-    initialScrollOnUserInputRef.current,
-  );
+  const [searchResults, setSearchResults] = useState<SearchResultState>({ resultIndex: -1, resultCount: 0 });
   const [sessionInfo, setSessionInfo] = useState<TerminalSessionInfo | null>(null);
   const isMac = useMemo(detectIsMacPlatform, []);
+  const settings = useTerminalSettings();
+  const { noteOutputActivity, resetFavicon, markFaviconDead } = useFaviconActivity(exitedRef);
+
+  const markShellDead = useCallback(
+    (code: number | null) => {
+      if (exitedRef.current) return;
+      exitedRef.current = true;
+      markFaviconDead();
+      terminalRef.current?.write(formatExitMarker(code));
+      document.title = titleForDeadSession(lastTitleRef.current);
+      setExitInfo({ code });
+      setSessionInfo(null);
+    },
+    [markFaviconDead],
+  );
+
+  const applyIncomingTitle = useCallback((rawTitle: string) => {
+    if (exitedRef.current) return;
+    const trimmed = rawTitle.trim();
+    if (!trimmed) return;
+    lastTitleRef.current = trimmed;
+    document.title = titleForLiveSession(trimmed);
+  }, []);
+
+  const transport = useTerminalTransport({
+    onMessage: (type, payload) => {
+      switch (type) {
+        case TERMINAL_MSG_TYPE.OUTPUT:
+          terminalRef.current?.write(decodeTextPayload(payload));
+          noteOutputActivity();
+          break;
+        case TERMINAL_MSG_TYPE.TITLE:
+          applyIncomingTitle(decodeTextPayload(payload));
+          break;
+        case TERMINAL_MSG_TYPE.SESSION_INFO: {
+          const info = decodeSessionInfoPayload(payload);
+          if (info) setSessionInfo(info as TerminalSessionInfo);
+          break;
+        }
+        case TERMINAL_MSG_TYPE.EXIT:
+          resetFavicon();
+          markShellDead(decodeExitPayload(payload));
+          break;
+      }
+    },
+    onReady: () => {
+      const terminal = terminalRef.current;
+      if (terminal)
+        transport.send(TERMINAL_MSG_TYPE.RESIZE, encodeResizePayload(terminal.cols, terminal.rows));
+    },
+    onChannelClose: () => markShellDead(null),
+    onConnectionLost: () => markShellDead(null),
+  });
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-
-    let disposed = false;
-    let exited = false;
-    let wasEverConnected = false;
-    let lastTitle = "";
-    let socket: WebSocket | null = null;
-    let reconnectTimer: number | null = null;
     let resizeTimer: number | null = null;
-    let faviconActiveTimer: number | null = null;
-    let faviconIdleTimer: number | null = null;
-    let faviconState: "idle" | "active" = "idle";
-
-    const noteOutputActivity = () => {
-      if (faviconIdleTimer !== null) {
-        window.clearTimeout(faviconIdleTimer);
-        faviconIdleTimer = null;
-      }
-      if (faviconState === "idle" && faviconActiveTimer === null) {
-        faviconActiveTimer = window.setTimeout(() => {
-          faviconActiveTimer = null;
-          if (disposed || exited) return;
-          faviconState = "active";
-          setTabFaviconState("active");
-        }, FAVICON_ACTIVE_DEBOUNCE_MS);
-      }
-      faviconIdleTimer = window.setTimeout(() => {
-        faviconIdleTimer = null;
-        if (faviconActiveTimer !== null) {
-          window.clearTimeout(faviconActiveTimer);
-          faviconActiveTimer = null;
-        }
-        if (faviconState === "active") {
-          faviconState = "idle";
-          setTabFaviconState("idle");
-        }
-      }, FAVICON_IDLE_DEBOUNCE_MS);
-    };
-
-    const resetFavicon = () => {
-      if (faviconActiveTimer !== null) {
-        window.clearTimeout(faviconActiveTimer);
-        faviconActiveTimer = null;
-      }
-      if (faviconIdleTimer !== null) {
-        window.clearTimeout(faviconIdleTimer);
-        faviconIdleTimer = null;
-      }
-      if (faviconState === "active") {
-        faviconState = "idle";
-        setTabFaviconState("idle");
-      }
-    };
-
-    const initialFont = findTerminalFontById(initialFontIdRef.current);
-    void awaitFontReady(initialFont);
-
+    void awaitFontReady(settings.initialFont);
     const terminal = new XtermTerminal({
       allowProposedApi: true,
-      cursorBlink: initialCursorBlinkRef.current,
-      cursorStyle: initialCursorStyleRef.current,
-      fontFamily: initialFont.family,
-      fontSize: initialFontSizeRef.current,
-      lineHeight: initialLineHeightRef.current,
-      scrollback: initialScrollbackRef.current,
-      theme: findTerminalThemeById(initialThemeIdRef.current).colors,
+      cursorBlink: settings.initialCursorBlink,
+      cursorStyle: settings.initialCursorStyle,
+      fontFamily: settings.initialFont.family,
+      fontSize: settings.initialFontSize,
+      lineHeight: settings.initialLineHeight,
+      scrollback: settings.initialScrollback,
+      theme: settings.effectiveTheme.colors,
       macOptionIsMeta: true,
-      scrollOnUserInput: initialScrollOnUserInputRef.current,
+      scrollOnUserInput: settings.initialScrollOnUserInput,
     });
     terminalRef.current = terminal;
     const fitAddon = new FitAddon();
@@ -260,7 +191,6 @@ export const Terminal = ({ onModalOpenChange }: TerminalProps = {}) => {
     terminal.loadAddon(searchAddon);
     searchAddonRef.current = searchAddon;
     const searchResultsDisposable = searchAddon.onDidChangeResults(setSearchResults);
-
     terminal.open(container);
     try {
       const webglAddon = new WebglAddon();
@@ -269,7 +199,6 @@ export const Terminal = ({ onModalOpenChange }: TerminalProps = {}) => {
     } catch {
       /* webgl unavailable; xterm falls back to canvas */
     }
-
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.key === "Tab" && (event.metaKey || event.ctrlKey)) return false;
       if (isFindShortcut(event, isMac)) {
@@ -281,32 +210,12 @@ export const Terminal = ({ onModalOpenChange }: TerminalProps = {}) => {
       }
       return true;
     });
-
-    const applyIncomingTitle = (rawTitle: string) => {
-      if (exited) return;
-      const trimmed = rawTitle.trim();
-      if (!trimmed) return;
-      lastTitle = trimmed;
-      document.title = titleForLiveSession(trimmed);
-    };
-
     const titleDisposable = terminal.onTitleChange(applyIncomingTitle);
-
     refocusTerminalRef.current = () => terminal.focus();
-
-    const send = (message: ClientToServerMessage) => {
-      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
-    };
-
-    const sendResize = (cols: number, rows: number) => send({ type: "resize", cols, rows });
-
     const fitToContainer = () => {
-      // Skip the resize ping when fit() bailed out (unmeasured container) — sending
-      // the previous cols/rows would briefly desync the PTY until the next observer tick.
       if (!fitTerminalPreservingScroll(terminal, fitAddon)) return;
-      sendResize(terminal.cols, terminal.rows);
+      transport.send(TERMINAL_MSG_TYPE.RESIZE, encodeResizePayload(terminal.cols, terminal.rows));
     };
-
     const scheduleFit = () => {
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       resizeTimer = window.setTimeout(() => {
@@ -314,257 +223,78 @@ export const Terminal = ({ onModalOpenChange }: TerminalProps = {}) => {
         fitToContainer();
       }, RESIZE_DEBOUNCE_MS);
     };
-
     terminal.onData((data) => {
       for (const chunk of chunkInputByCodeUnits(data, MAX_INPUT_BYTES)) {
-        send({ type: "input", data: chunk });
+        transport.send(TERMINAL_MSG_TYPE.INPUT, encodeTextPayload(chunk));
       }
     });
-    terminal.onResize(({ cols, rows }) => sendResize(cols, rows));
-
+    terminal.onResize(({ cols, rows }) => {
+      transport.send(TERMINAL_MSG_TYPE.RESIZE, encodeResizePayload(cols, rows));
+    });
     const observer = new ResizeObserver(scheduleFit);
     observer.observe(container);
     fitToContainer();
     terminal.focus();
-
-    const markShellDead = (code: number | null) => {
-      if (exited) return;
-      exited = true;
-      resetFavicon();
-      setTabFaviconState("dead");
-      terminal.write(formatExitMarker(code));
-      document.title = titleForDeadSession(lastTitle);
-      setExitInfo({ code });
-      // Clear so the Settings → Shell section doesn't show a stale dead PID/cwd.
-      setSessionInfo(null);
-    };
-
-    const connect = () => {
-      if (disposed) return;
-      const nextSocket = new WebSocket(buildWebSocketUrl());
-      socket = nextSocket;
-
-      nextSocket.addEventListener("open", () => {
-        if (disposed || socket !== nextSocket) return;
-        wasEverConnected = true;
-        setConsecutiveFailures(0);
-        sendResize(terminal.cols, terminal.rows);
-      });
-
-      nextSocket.addEventListener("message", (event) => {
-        if (disposed || socket !== nextSocket) return;
-        let raw: unknown;
-        try {
-          raw = JSON.parse(typeof event.data === "string" ? event.data : String(event.data));
-        } catch {
-          return;
-        }
-        const parsed = serverToClientMessageSchema.safeParse(raw);
-        if (!parsed.success) return;
-        const message = parsed.data;
-        if (message.type === "output") {
-          terminal.write(message.data);
-          noteOutputActivity();
-        } else if (message.type === "title") {
-          applyIncomingTitle(message.title);
-        } else if (message.type === "session") {
-          setSessionInfo({
-            shell: message.shell,
-            shellName: message.shellName,
-            pid: message.pid,
-            cwd: message.cwd,
-          });
-        } else if (message.type === "exit") {
-          resetFavicon();
-          markShellDead(message.code);
-        }
-      });
-
-      nextSocket.addEventListener("close", () => {
-        if (socket !== nextSocket) return;
-        socket = null;
-        if (disposed) return;
-        if (exited) return;
-        if (wasEverConnected) {
-          markShellDead(null);
-          return;
-        }
-        setConsecutiveFailures((previous) => previous + 1);
-        reconnectTimer = window.setTimeout(connect, RECONNECT_DELAY_MS);
-      });
-
-      nextSocket.addEventListener("error", () => {
-        try {
-          nextSocket.close();
-        } catch {
-          /* socket already closing */
-        }
-      });
-    };
-
-    manualReconnectRef.current = () => {
-      if (disposed || exited) return;
-      if (reconnectTimer !== null) {
-        window.clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-      try {
-        socket?.close();
-      } catch {
-        /* socket already closing */
-      }
-      socket = null;
-      connect();
-    };
-
-    connect();
-
+    transport.connect(buildWebSocketUrl());
     return () => {
-      disposed = true;
-      manualReconnectRef.current = null;
+      transport.disconnect();
       refocusTerminalRef.current = null;
       searchAddonRef.current = null;
       terminalRef.current = null;
       fitAddonRef.current = null;
       titleDisposable.dispose();
       searchResultsDisposable.dispose();
-      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       resetFavicon();
       observer.disconnect();
-      try {
-        socket?.close();
-      } catch {
-        /* socket already closed */
-      }
-      socket = null;
       terminal.dispose();
       document.title = DEFAULT_DOCUMENT_TITLE;
     };
   }, []);
 
   useEffect(() => {
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-    terminal.options.theme = effectiveTheme.colors;
-  }, [effectiveTheme]);
+    if (terminalRef.current) terminalRef.current.options.theme = settings.effectiveTheme.colors;
+  }, [settings.effectiveTheme]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
     let cancelled = false;
-    void awaitFontReady(effectiveFont).then(() => {
-      if (cancelled) return;
-      const liveTerminal = terminalRef.current;
-      if (!liveTerminal) return;
-      liveTerminal.options.fontFamily = effectiveFont.family;
-      const liveFitAddon = fitAddonRef.current;
-      if (liveFitAddon) fitTerminalPreservingScroll(liveTerminal, liveFitAddon);
+    void awaitFontReady(settings.effectiveFont).then(() => {
+      if (cancelled || !terminalRef.current) return;
+      terminalRef.current.options.fontFamily = settings.effectiveFont.family;
+      if (fitAddonRef.current) fitTerminalPreservingScroll(terminalRef.current, fitAddonRef.current);
     });
     return () => {
       cancelled = true;
     };
-  }, [effectiveFont]);
-
-  const handleThemeChange = useCallback((nextThemeId: string) => {
-    setActiveThemeId(nextThemeId);
-    setPreviewThemeId(null);
-    storeTerminalThemeId(nextThemeId);
-  }, []);
-
-  const handleFontChange = useCallback((nextFontId: string) => {
-    setActiveFontId(nextFontId);
-    setPreviewFontId(null);
-    storeTerminalFontId(nextFontId);
-  }, []);
+  }, [settings.effectiveFont]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
-    terminal.options.fontSize = activeFontSize;
-    const fitAddon = fitAddonRef.current;
-    if (fitAddon) fitTerminalPreservingScroll(terminal, fitAddon);
-  }, [activeFontSize]);
-
-  const handleFontSizeChange = useCallback((nextFontSize: number) => {
-    const clamped = clampTerminalFontSize(nextFontSize);
-    setActiveFontSize(clamped);
-    storeTerminalFontSize(clamped);
-  }, []);
+    terminal.options.fontSize = settings.activeFontSize;
+    terminal.options.lineHeight = settings.activeLineHeight;
+    if (fitAddonRef.current) fitTerminalPreservingScroll(terminal, fitAddonRef.current);
+  }, [settings.activeFontSize, settings.activeLineHeight]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
-    terminal.options.lineHeight = activeLineHeight;
-    const fitAddon = fitAddonRef.current;
-    if (fitAddon) fitTerminalPreservingScroll(terminal, fitAddon);
-  }, [activeLineHeight]);
-
-  const handleLineHeightChange = useCallback((nextLineHeight: number) => {
-    const clamped = clampTerminalLineHeight(nextLineHeight);
-    setActiveLineHeight(clamped);
-    storeTerminalLineHeight(clamped);
-  }, []);
-
-  useEffect(() => {
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-    terminal.options.cursorStyle = effectiveCursorStyle;
-  }, [effectiveCursorStyle]);
-
-  const handleCursorStyleChange = useCallback((nextCursorStyle: TerminalCursorStyle) => {
-    setActiveCursorStyle(nextCursorStyle);
-    setPreviewCursorStyle(null);
-    storeTerminalCursorStyle(nextCursorStyle);
-  }, []);
-
-  useEffect(() => {
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-    terminal.options.cursorBlink = activeCursorBlink;
-  }, [activeCursorBlink]);
-
-  const handleCursorBlinkChange = useCallback((nextCursorBlink: boolean) => {
-    setActiveCursorBlink(nextCursorBlink);
-    storeTerminalCursorBlink(nextCursorBlink);
-  }, []);
-
-  useEffect(() => {
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-    terminal.options.scrollback = activeScrollback;
-  }, [activeScrollback]);
-
-  const handleScrollbackChange = useCallback((nextScrollback: number) => {
-    setActiveScrollback(nextScrollback);
-    storeTerminalScrollback(nextScrollback);
-  }, []);
-
-  useEffect(() => {
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-    terminal.options.scrollOnUserInput = activeScrollOnUserInput;
-  }, [activeScrollOnUserInput]);
-
-  const handleScrollOnUserInputChange = useCallback((nextScrollOnUserInput: boolean) => {
-    setActiveScrollOnUserInput(nextScrollOnUserInput);
-    storeTerminalScrollOnUserInput(nextScrollOnUserInput);
-  }, []);
+    terminal.options.cursorStyle = settings.effectiveCursorStyle;
+    terminal.options.cursorBlink = settings.activeCursorBlink;
+    terminal.options.scrollback = settings.activeScrollback;
+    terminal.options.scrollOnUserInput = settings.activeScrollOnUserInput;
+  }, [settings.effectiveCursorStyle, settings.activeCursorBlink, settings.activeScrollback, settings.activeScrollOnUserInput]);
 
   useEffect(() => {
     if (!isSearchOpen) return;
-    const input = searchInputRef.current;
-    if (!input) return;
-    input.focus();
-    input.select();
+    searchInputRef.current?.focus();
+    searchInputRef.current?.select();
   }, [isSearchOpen, searchOpenAttempt]);
 
   const findNextMatch = useCallback((query: string) => {
-    if (!query) {
-      searchAddonRef.current?.clearDecorations();
-      setSearchResults({ resultIndex: -1, resultCount: 0 });
-      return;
-    }
+    if (!query) { searchAddonRef.current?.clearDecorations(); setSearchResults({ resultIndex: -1, resultCount: 0 }); return; }
     searchAddonRef.current?.findNext(query, { decorations: SEARCH_DECORATION_OPTIONS });
   }, []);
 
@@ -574,17 +304,11 @@ export const Terminal = ({ onModalOpenChange }: TerminalProps = {}) => {
   }, []);
 
   const closeSearch = useCallback(() => {
-    setIsSearchOpen(false);
-    setSearchQuery("");
-    setSearchResults({ resultIndex: -1, resultCount: 0 });
-    searchAddonRef.current?.clearDecorations();
-    refocusTerminalRef.current?.();
+    setIsSearchOpen(false); setSearchQuery(""); setSearchResults({ resultIndex: -1, resultCount: 0 });
+    searchAddonRef.current?.clearDecorations(); refocusTerminalRef.current?.();
   }, []);
 
-  const openSearchOverlay = useCallback(() => {
-    setIsSearchOpen(true);
-    setSearchOpenAttempt((previous) => previous + 1);
-  }, []);
+  const openSearchOverlay = useCallback(() => { setIsSearchOpen(true); setSearchOpenAttempt((p) => p + 1); }, []);
   openSearchOverlayRef.current = openSearchOverlay;
 
   const handleSearchInputChange = useCallback(
@@ -610,72 +334,28 @@ export const Terminal = ({ onModalOpenChange }: TerminalProps = {}) => {
       }
       if (event.key === "Enter") {
         event.preventDefault();
-        if (event.shiftKey) {
-          findPreviousMatch(searchQuery);
-        } else {
-          findNextMatch(searchQuery);
-        }
+        if (event.shiftKey) findPreviousMatch(searchQuery);
+        else findNextMatch(searchQuery);
       }
     },
     [closeSearch, findNextMatch, findPreviousMatch, isMac, searchQuery],
   );
 
-  const triggerManualReconnect = useCallback(() => {
-    setIsRetryingConnection(true);
-    manualReconnectRef.current?.();
-    if (retryFeedbackTimerRef.current !== null) {
-      window.clearTimeout(retryFeedbackTimerRef.current);
-    }
-    retryFeedbackTimerRef.current = window.setTimeout(() => {
-      retryFeedbackTimerRef.current = null;
-      setIsRetryingConnection(false);
-    }, RETRY_BUTTON_FEEDBACK_MS);
-  }, []);
-
-  const copyRestartCommand = useCallback(() => {
-    void navigator.clipboard
-      .writeText(RESTART_COMMAND)
-      .then(() => {
-        setHasCopiedRestartCommand(true);
-        if (copyFeedbackTimerRef.current !== null) {
-          window.clearTimeout(copyFeedbackTimerRef.current);
-        }
-        copyFeedbackTimerRef.current = window.setTimeout(() => {
-          copyFeedbackTimerRef.current = null;
-          setHasCopiedRestartCommand(false);
-        }, COPY_FEEDBACK_MS);
-      })
-      .catch(() => {
-        /* clipboard permission denied; user can still select + copy manually */
-      });
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (retryFeedbackTimerRef.current !== null) {
-        window.clearTimeout(retryFeedbackTimerRef.current);
-        retryFeedbackTimerRef.current = null;
-      }
-      if (copyFeedbackTimerRef.current !== null) {
-        window.clearTimeout(copyFeedbackTimerRef.current);
-        copyFeedbackTimerRef.current = null;
-      }
-    };
-  }, []);
-
   const isShellDead = exitInfo !== null;
-  const isDisconnected = !isShellDead && consecutiveFailures >= DISCONNECT_MODAL_THRESHOLD_FAILURES;
+  const isDisconnected =
+    !isShellDead && transport.consecutiveFailures >= DISCONNECT_MODAL_THRESHOLD_FAILURES;
   const isModalOpen = isShellDead || isDisconnected;
 
   useEffect(() => {
     onModalOpenChange?.(isModalOpen);
   }, [isModalOpen, onModalOpenChange]);
+
   const matchLabel =
     searchResults.resultCount === 0
       ? "0/0"
       : `${searchResults.resultIndex + 1}/${searchResults.resultCount}`;
-
-  const pageBackground = effectiveTheme.colors.background ?? FALLBACK_TERMINAL_BACKGROUND_HEX;
+  const pageBackground =
+    settings.effectiveTheme.colors.background ?? FALLBACK_TERMINAL_BACKGROUND_HEX;
 
   return (
     <div className="h-dvh w-dvw" style={{ background: pageBackground }}>
@@ -698,25 +378,25 @@ export const Terminal = ({ onModalOpenChange }: TerminalProps = {}) => {
             className="absolute top-2 right-3 z-10 flex items-center gap-0.5 rounded-md border border-border/60 bg-background/70 p-0.5 text-muted-foreground shadow-xs backdrop-blur-md"
           >
             <SettingsMenu
-              themeId={activeThemeId}
-              onThemeChange={handleThemeChange}
-              onThemePreview={setPreviewThemeId}
-              fontId={activeFontId}
-              onFontChange={handleFontChange}
-              onFontPreview={setPreviewFontId}
-              fontSize={activeFontSize}
-              onFontSizeChange={handleFontSizeChange}
-              lineHeight={activeLineHeight}
-              onLineHeightChange={handleLineHeightChange}
-              cursorStyle={activeCursorStyle}
-              onCursorStyleChange={handleCursorStyleChange}
-              onCursorStylePreview={setPreviewCursorStyle}
-              cursorBlink={activeCursorBlink}
-              onCursorBlinkChange={handleCursorBlinkChange}
-              scrollback={activeScrollback}
-              onScrollbackChange={handleScrollbackChange}
-              scrollOnUserInput={activeScrollOnUserInput}
-              onScrollOnUserInputChange={handleScrollOnUserInputChange}
+              themeId={settings.activeThemeId}
+              onThemeChange={settings.handleThemeChange}
+              onThemePreview={settings.setPreviewThemeId}
+              fontId={settings.activeFontId}
+              onFontChange={settings.handleFontChange}
+              onFontPreview={settings.setPreviewFontId}
+              fontSize={settings.activeFontSize}
+              onFontSizeChange={settings.handleFontSizeChange}
+              lineHeight={settings.activeLineHeight}
+              onLineHeightChange={settings.handleLineHeightChange}
+              cursorStyle={settings.activeCursorStyle}
+              onCursorStyleChange={settings.handleCursorStyleChange}
+              onCursorStylePreview={settings.setPreviewCursorStyle}
+              cursorBlink={settings.activeCursorBlink}
+              onCursorBlinkChange={settings.handleCursorBlinkChange}
+              scrollback={settings.activeScrollback}
+              onScrollbackChange={settings.handleScrollbackChange}
+              scrollOnUserInput={settings.activeScrollOnUserInput}
+              onScrollOnUserInputChange={settings.handleScrollOnUserInputChange}
               sessionInfo={sessionInfo}
             />
             <Tooltip>
@@ -803,61 +483,12 @@ export const Terminal = ({ onModalOpenChange }: TerminalProps = {}) => {
         ) : null}
       </div>
 
-      <AlertDialog open={isModalOpen}>
-        <AlertDialogContent>
-          {exitInfo !== null ? (
-            <>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Shell ended</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {exitInfo.code === null || exitInfo.code === 0
-                    ? "Open a new shell to keep going, or close this tab."
-                    : `Exit code ${exitInfo.code}. Open a new shell to keep going.`}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogAction onClick={openNewShellInNewTab}>New shell</AlertDialogAction>
-              </AlertDialogFooter>
-            </>
-          ) : (
-            <>
-              <AlertDialogHeader>
-                <AlertDialogTitle className="flex items-center gap-2">
-                  <Spinner aria-hidden="true" role="presentation" aria-label={undefined} />
-                  Lost connection
-                </AlertDialogTitle>
-                <AlertDialogDescription>
-                  The localterm server isn't responding. Start it again from your terminal, then
-                  retry.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <InputGroup>
-                <InputGroupInput
-                  readOnly
-                  value={RESTART_COMMAND}
-                  aria-label="restart command"
-                  className="font-mono"
-                />
-                <InputGroupAddon align="inline-end">
-                  <InputGroupButton
-                    size="icon-xs"
-                    onClick={copyRestartCommand}
-                    aria-label={hasCopiedRestartCommand ? "Copied" : "Copy restart command"}
-                  >
-                    {hasCopiedRestartCommand ? <Check /> : <Copy />}
-                  </InputGroupButton>
-                </InputGroupAddon>
-              </InputGroup>
-              <AlertDialogFooter>
-                <AlertDialogAction onClick={triggerManualReconnect} disabled={isRetryingConnection}>
-                  {isRetryingConnection ? <Spinner data-icon="inline-start" /> : null}
-                  Retry
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </>
-          )}
-        </AlertDialogContent>
-      </AlertDialog>
+      <TerminalStatusDialog
+        exitCode={exitInfo?.code}
+        isShellDead={isShellDead}
+        isDisconnected={isDisconnected}
+        onReconnect={transport.reconnect}
+      />
     </div>
   );
 };
