@@ -44,16 +44,21 @@ export const decodeResizePayload = (
   return { cols: view.getUint16(0), rows: view.getUint16(2) };
 };
 
+// INT32_MIN (0x80000000) is used as the null sentinel for exit codes.
+// Real exit codes are 0-255 on POSIX and 0-4294967295 on Windows;
+// -2147483648 cannot occur as a genuine exit code on any platform.
+const EXIT_CODE_NULL_SENTINEL = -2147483648;
+
 export const encodeExitPayload = (code: number | null): Uint8Array => {
   const buffer = new Uint8Array(4);
-  new DataView(buffer.buffer).setInt32(0, code ?? -1);
+  new DataView(buffer.buffer).setInt32(0, code ?? EXIT_CODE_NULL_SENTINEL);
   return buffer;
 };
 
 export const decodeExitPayload = (payload: Uint8Array): number | null => {
   if (payload.length < 4) return null;
   const code = new DataView(payload.buffer, payload.byteOffset).getInt32(0);
-  return code === -1 ? null : code;
+  return code === EXIT_CODE_NULL_SENTINEL ? null : code;
 };
 
 export const decodeSessionInfoPayload = (payload: Uint8Array): unknown => {

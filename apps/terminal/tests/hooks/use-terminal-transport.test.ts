@@ -309,10 +309,16 @@ describe("useTerminalTransport", () => {
     expect(view.getUint16(2)).toBe(40);
   });
 
-  it("decodes exit payload with null exit code (-1)", () => {
+  it("decodes exit payload with null exit code (INT32_MIN sentinel)", () => {
+    const payload = new Uint8Array(4);
+    new DataView(payload.buffer).setInt32(0, -2147483648);
+    expect(decodeExitPayload(payload)).toBeNull();
+  });
+
+  it("does not treat -1 as null (real exit code preserved)", () => {
     const payload = new Uint8Array(4);
     new DataView(payload.buffer).setInt32(0, -1);
-    expect(decodeExitPayload(payload)).toBeNull();
+    expect(decodeExitPayload(payload)).toBe(-1);
   });
 
   it("decodes exit payload with numeric exit code", () => {

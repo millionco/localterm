@@ -16,6 +16,7 @@ export class XumuxClient {
   private callbacks: XumuxClientCallbacks;
   private keepaliveTimer: number | null = null;
   private isWelcomed = false;
+  private isDisposed = false;
   private activeChannels = new Set<number>();
 
   constructor(adapter: TransportAdapter, callbacks: XumuxClientCallbacks) {
@@ -85,6 +86,10 @@ export class XumuxClient {
   }
 
   private handleClose(): void {
+    // Guard against stale close events firing after dispose().
+    // The old WebSocket may fire onClose asynchronously after disposal;
+    // without this check the callback schedules a spurious reconnect.
+    if (this.isDisposed) return;
     this.stopKeepalive();
     this.isWelcomed = false;
     this.activeChannels.clear();
@@ -131,7 +136,11 @@ export class XumuxClient {
   }
 
   dispose(): void {
+    this.isDisposed = true;
     this.stopKeepalive();
+    // Null out adapter callbacks before closing so the async onClose event
+    // that fires after close() cannot re-enter handleClose().
+    this.adapter.onClose = () => undefined;
     this.adapter.close();
     this.activeChannels.clear();
     this.isWelcomed = false;
